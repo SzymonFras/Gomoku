@@ -1,0 +1,11 @@
+*.csv
+*.npy
+*.h5
+*.pt
+*.pth
+*.txt
+venv/
+.venv/
+__pycache__/
+.pytest_cache/
+.idea/
