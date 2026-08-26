@@ -1,0 +1,44 @@
+# Learning Loop
+main_rl_loop:
+  iterations: 2
+  num_games: 98
+  target_moves: 100000
+  window_size: 3
+
+#Evaluate candidate
+evaluate_candidate:
+  num_games_old: 100
+  num_games_heur: 100
+  num_games_base: 100
+  threshold_old: 52.0
+  threshold_base: 55.0
+  threshold_heur: 60.0
+
+# Game generate
+generator:
+  num_games: 100
+  temp_moves: 12
+  self_play_ratio: 0.75
+  temp: 1.0
+  end_temp: 0.1
+  discount_factor: 0.90
+  top_k: 3
+  end_top_k: 1
+
+# Cnn
+CNN:
+  batch_size: 256
+  epochs: 5
+  lr: 0.0001
+
+#GUI
+load_cnn_model:
+  path: 'models/model_19_rl.pt'
+  structure: model_4_structure
+
+#game simul
+game_simul:
+  players_paths: ['models/model_19_rl.pt','models/model_11_rl.pt']
+  players2_paths: ['models/model_19_rl.pt','models/model_11_rl.pt']
+  heur: True
+  games: 50

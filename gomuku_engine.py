@@ -1,6 +1,5 @@
 from typing import List, Tuple, Optional
 import uuid
-import random
 class GomokuEngine:
     def __init__(self, board_size: int = 15):
         self.board_size = board_size
@@ -35,11 +34,11 @@ class GomokuEngine:
         if self.is_game_over:
             return False
         if not (0 <= row < self.board_size and 0 <= col < self.board_size):
-            print("Ruch poza planszą!")
+            print("Move outside the board")
             return False
 
         if self.board[row][col] != '.':
-            print("To pole jest już zajęte!")
+            print("Field is taken")
             return False
         self.board[row][col] = self.current_player
         self.move_number += 1
@@ -78,12 +77,7 @@ class GomokuEngine:
 
             if count >= length:
                 return True
-
         return False
-    def select_move(self) -> tuple[int, int]:
-        legal_moves = self.get_legal_moves()
-        move = random.choice(legal_moves)
-        return move
     def play_game(self, player_x_fn, player_o_fn,opening_moves: List[Tuple[int, int]] = None) -> None:
         self.reset_game()
         if len(opening_moves) == 0:
@@ -101,7 +95,7 @@ class GomokuEngine:
             self.make_move(row, col)
 
 
-    def get_bigquery_data(self) -> List[dict]:
+    def get_data(self) -> List[dict]:
         rows = []
         for move_num, player, r, c in self.history:
             rows.append({
@@ -120,52 +114,3 @@ class GomokuEngine:
         for idx, row in enumerate(self.board):
             print(f"{idx:2} " + "  ".join(row))
         print(f"Status: Game Over={self.is_game_over} | Winner={self.winner}\n")
-    def select_weighted_move(self) -> Tuple[int, int]:
-        legal_moves = self.get_legal_moves()
-        if self.move_number == 0:
-            center = self.board_size // 2
-            return (center, center)
-        player = self.current_player
-        opponent = 'O' if player == 'X' else 'X'
-        for row, col in legal_moves:
-            self.board[row][col] = player
-            is_winning = self._check_winner(row, col,5)
-            self.board[row][col] = '.'
-            if is_winning:
-                return row, col
-        for row, col in legal_moves:
-            self.board[row][col] = opponent
-            if self._check_winner(row, col, 5):
-                self.board[row][col] = '.'
-                return row, col
-            self.board[row][col] = '.'
-        for row, col in legal_moves:
-            self.board[row][col] = player
-            if self._check_winner(row, col, 4):
-                self.board[row][col] = '.'
-                return row, col
-            self.board[row][col] = '.'
-        for row, col in legal_moves:
-            self.board[row][col] = opponent
-            if self._check_winner(row, col, 4):
-                self.board[row][col] = '.'
-                return row, col
-            self.board[row][col] = '.'
-        move_scores = []
-        for row, col in legal_moves:
-            score = 1
-            for dr in [-1, 0, 1]:
-                for dc in [-1, 0, 1]:
-                    if dr == 0 and dc == 0:
-                        continue
-                    r, c = row + dr, col + dc
-                    if 0 <= r < self.board_size and 0 <= c < self.board_size:
-                        neighbor = self.board[r][c]
-                        if neighbor == player:
-                            score += 1000
-                        elif neighbor == opponent:
-                            score += 700
-
-            move_scores.append(score)
-        chosen_move = random.choices(legal_moves, weights=move_scores, k=1)[0]
-        return chosen_move
