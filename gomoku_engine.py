@@ -23,11 +23,35 @@ class GomokuEngine:
         self.opening_state = ""
 
     def get_legal_moves(self) -> List[Tuple[int, int]]:
+        if self.move_number == 0:
+            center = self.board_size // 2
+            return [(center, center)]
         legal_moves = []
+        radius = 2
         for r in range(self.board_size):
             for c in range(self.board_size):
                 if self.board[r][c] == '.':
-                    legal_moves.append((r, c))
+                    has_neighbor = False
+                    r_min = max(0, r - radius)
+                    r_max = min(self.board_size - 1, r + radius)
+                    c_min = max(0, c - radius)
+                    c_max = min(self.board_size - 1, c + radius)
+
+                    for nr in range(r_min, r_max + 1):
+                        for nc in range(c_min, c_max + 1):
+                            if self.board[nr][nc] != '.':
+                                has_neighbor = True
+                                break
+                        if has_neighbor:
+                            break
+
+                    if has_neighbor:
+                        legal_moves.append((r, c))
+        if not legal_moves:
+            for r in range(self.board_size):
+                for c in range(self.board_size):
+                    if self.board[r][c] == '.':
+                        legal_moves.append((r, c))
         return legal_moves
 
     def make_move(self, row: int, col: int) -> bool:
@@ -80,6 +104,8 @@ class GomokuEngine:
         return False
     def play_game(self, player_x_fn, player_o_fn,opening_moves: List[Tuple[int, int]] = None) -> None:
         self.reset_game()
+        if not opening_moves:
+            opening_moves = []
         if len(opening_moves) == 0:
             self.opening_state = ""
         else:

@@ -3,12 +3,13 @@ import time
 import copy
 import random
 import torch
-from gomuku_engine import GomokuEngine
+from gomoku_engine import GomokuEngine
 from players_logic import make_cnn_prediction
 def load_config(config_path="config.yaml"):
     with open(config_path, 'r', encoding='utf-8') as file:
         config_dict = yaml.safe_load(file)
     return config_dict
+
 def load_cnn_model(path: str, structure):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = copy.deepcopy(structure).to(device)
@@ -38,7 +39,7 @@ def watch_generated_games(model, num_games=2):
 
         while not engine.is_game_over:
             current_p = engine.current_player
-            moves_played = sum(row.count('X') + row.count('O') for row in engine.board)
+            moves_played = engine.move_number
             temp = 1.0 if moves_played < 12 else 0.1
             (row, col) = make_cnn_prediction(
                 model=model,

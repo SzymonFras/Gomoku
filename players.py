@@ -1,7 +1,6 @@
-from gomuku_engine import GomokuEngine
-from players_logic import make_cnn_prediction
+from gomoku_engine import GomokuEngine
+from players_logic import make_cnn_prediction, select_weighted_move
 from utils import load_cnn_model
-from players_logic import select_weighted_move
 
 def human_player(engine):
     engine.render()

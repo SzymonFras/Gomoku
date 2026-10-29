@@ -11,32 +11,26 @@ def select_weighted_move(engine):
         return (center, center)
     player = engine.current_player
     opponent = 'O' if player == 'X' else 'X'
+    move_scores = []
     for row, col in legal_moves:
         engine.board[row][col] = player
-        is_winning = engine._check_winner(row, col ,5)
-        engine.board[row][col] = '.'
-        if is_winning:
+        if engine._check_winner(row, col, 5):
+            engine.board[row][col] = '.'
             return row, col
-    for row, col in legal_moves:
         engine.board[row][col] = opponent
         if engine._check_winner(row, col, 5):
             engine.board[row][col] = '.'
             return row, col
-        engine.board[row][col] = '.'
-    for row, col in legal_moves:
         engine.board[row][col] = player
         if engine._check_winner(row, col, 4):
             engine.board[row][col] = '.'
             return row, col
-        engine.board[row][col] = '.'
-    for row, col in legal_moves:
         engine.board[row][col] = opponent
         if engine._check_winner(row, col, 4):
             engine.board[row][col] = '.'
             return row, col
         engine.board[row][col] = '.'
-    move_scores = []
-    for row, col in legal_moves:
+
         score = 1
         for dr in [-1, 0, 1]:
             for dc in [-1, 0, 1]:
@@ -54,6 +48,30 @@ def select_weighted_move(engine):
     chosen_move = random.choices(legal_moves, weights=move_scores, k=1)[0]
     return chosen_move
 
+
+def get_network_output(model: torch.nn.Module, board_matrix: List[List[str]], current_player: str,
+                       device: str = "cuda"):
+    opponent_player = 'O' if current_player == 'X' else 'X'
+
+    board_np = np.array(board_matrix)
+    channel_my = (board_np == current_player).astype(np.float32)
+    channel_opp = (board_np == opponent_player).astype(np.float32)
+    channel_empty = (board_np == '.').astype(np.float32)
+    state_3c = np.stack([channel_my, channel_opp, channel_empty], axis=0)
+
+    tensor_input = torch.tensor(state_3c, dtype=torch.float32).unsqueeze(0).to(device)
+
+    model.eval()
+    with torch.no_grad():
+        with torch.amp.autocast(device_type="cuda" if "cuda" in str(device) else "cpu"):
+            outputs = model(tensor_input)
+            if isinstance(outputs, tuple):
+                logits, value = outputs
+                return logits.squeeze(0), value.item(), state_3c
+            else:
+                return outputs.squeeze(0), 0.0, state_3c
+
+
 def make_cnn_prediction(model: torch.nn.Module,
                         board_matrix: List[List[str]],
                         legal_moves: List[Tuple[int, int]],
@@ -63,34 +81,14 @@ def make_cnn_prediction(model: torch.nn.Module,
                         top_k: int = 1,
                         return_state: bool = False
                         ) -> Tuple[int, int]:
-    board_size = len(board_matrix)  # 15
-    opponent_player = 'O' if current_player == 'X' else 'X'
+    board_size = len(board_matrix)
 
-    channel_my = np.zeros((board_size, board_size), dtype=np.float32)
-    channel_opp = np.zeros((board_size, board_size), dtype=np.float32)
-    channel_empty = np.zeros((board_size, board_size), dtype=np.float32)
+    logits, _, state_3c = get_network_output(model, board_matrix, current_player, device)
 
-    for r in range(board_size):
-        for c in range(board_size):
-            cell = board_matrix[r][c]
-            if cell == current_player:
-                channel_my[r, c] = 1.0
-            elif cell == opponent_player:
-                channel_opp[r, c] = 1.0
-            else:
-                channel_empty[r, c] = 1.0
-
-    state_3c = np.stack([channel_my, channel_opp, channel_empty], axis=0)
-    tensor_input = torch.tensor(state_3c, dtype=torch.float32).unsqueeze(0).to(device)
-    model.eval()
-    with torch.no_grad():
-        with torch.amp.autocast(device_type="cuda" if "cuda" in str(device) else "cpu"):
-            logits = model(tensor_input).squeeze(0)
-        #probabilities = logits.squeeze(0).cpu().numpy()
     if not legal_moves:
         return None
-    mask = torch.full((board_size * board_size,), float('-inf'), device=device)
 
+    mask = torch.full((board_size * board_size,), float('-inf'), device=device)
     for r, c in legal_moves:
         mask[r * board_size + c] = 0.0
 
