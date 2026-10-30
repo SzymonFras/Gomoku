@@ -17,20 +17,31 @@ def select_weighted_move(engine):
         if engine._check_winner(row, col, 5):
             engine.board[row][col] = '.'
             return row, col
+        engine.board[row][col] = '.'
+
+    for row, col in legal_moves:
         engine.board[row][col] = opponent
         if engine._check_winner(row, col, 5):
             engine.board[row][col] = '.'
             return row, col
+        engine.board[row][col] = '.'
+
+    for row, col in legal_moves:
         engine.board[row][col] = player
         if engine._check_winner(row, col, 4):
             engine.board[row][col] = '.'
             return row, col
+        engine.board[row][col] = '.'
+
+    for row, col in legal_moves:
         engine.board[row][col] = opponent
         if engine._check_winner(row, col, 4):
             engine.board[row][col] = '.'
             return row, col
         engine.board[row][col] = '.'
 
+    move_scores = []
+    for row, col in legal_moves:
         score = 1
         for dr in [-1, 0, 1]:
             for dc in [-1, 0, 1]:
@@ -43,7 +54,6 @@ def select_weighted_move(engine):
                         score += 1000
                     elif neighbor == opponent:
                         score += 700
-
         move_scores.append(score)
     chosen_move = random.choices(legal_moves, weights=move_scores, k=1)[0]
     return chosen_move
@@ -62,7 +72,7 @@ def get_network_output(model: torch.nn.Module, board_matrix: List[List[str]], cu
     tensor_input = torch.tensor(state_3c, dtype=torch.float32).unsqueeze(0).to(device)
 
     model.eval()
-    with torch.no_grad():
+    with torch.inference_mode():
         with torch.amp.autocast(device_type="cuda" if "cuda" in str(device) else "cpu"):
             outputs = model(tensor_input)
             if isinstance(outputs, tuple):

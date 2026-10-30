@@ -47,7 +47,18 @@ def generate_warmup_data(num_games=1000, output_path="Data_rfl/warmup_buffer.pt"
                 reward = 1.0
             else:
                 reward = -1.0
-            all_data.append((step['state'], step['pi'], reward))
+            state = step['state']
+            pi_2d = step['pi'].reshape(engine.board_size, engine.board_size)
+
+            for k in range(4):
+                rot_state = np.rot90(state, k=k, axes=(1, 2))
+                rot_pi = np.rot90(pi_2d, k=k)
+                all_data.append((rot_state.copy(), rot_pi.flatten().copy(), reward))
+
+                flip_state = np.flip(rot_state, axis=2)
+                flip_pi = np.fliplr(rot_pi)
+                all_data.append((flip_state.copy(), flip_pi.flatten().copy(), reward))
+
         if (i + 1)%100==0:
             print(f"Game {i + 1}/{num_games} finished. Result: {winner}. Moves: {engine.move_number}")
 
@@ -65,4 +76,4 @@ def init_fresh_alphazero_model(models_dir="models", filename="model_20_rl.pt"):
 
 if __name__ == "__main__":
     #init_fresh_alphazero_model()
-    generate_warmup_data(num_games=5000, output_path="Data_rfl/warmup_buffer.pt")
+    generate_warmup_data(num_games=1000, output_path="Data_rfl/warmup_buffer.pt")

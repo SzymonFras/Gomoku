@@ -1,43 +1,45 @@
 # Learning Loop
 main_rl_loop:
-  iterations: 3
-  num_games: 100
-  target_moves: 80000
-  window_size: 4
+  iterations: 2
+  num_games: 80
+  target_moves: 50000
+  window_size: 2
   only_winners: False
-  skip_first_gen: True
-  warmup_ratios: [1.0, 0.4, 0.2, 0.0]
+  skip_first_gen: False
+  warmup_ratios: [0.0]
 
-#Evaluate candidate
+# Evaluate candidate
 evaluate_candidate:
-  baseline_model_path: 'models/model_20_rl.pt'
+  baseline_model_path: 'models/model_21_rl.pt'
   num_games_old: 40
-  num_games_heur: 20
-  num_games_base: 40
+  num_games_heur: 40
+  num_games_base: 20
   threshold_old: 52.0
-  threshold_base: 60
-  threshold_heur: 20
-  num_simulations: 100
-  c_puct: 1.5
+  threshold_base: 0.0
+  threshold_heur: 0.0
+  num_simulations: 300
+  c_puct: 1
   opening_moves_k: 2
 
 # Game generate
 generator:
-  num_simulations: 100 #mcts
-  temp_moves: 14
-  c_puct: 2.5
+  num_simulations: 300
+  temp_moves: 10
+  c_puct: 1
   temp: 0.5
   opening_moves_k: 2
+  heuristic_ratio: 0.1
 
-# Cnn
+# CNN
 CNN:
   batch_size: 512
-  epochs: 2
-  lr: 0.00002
+  epochs: 5
+  lr: 0.0001
+  weight_decay: 0.0001
 
-#GUI
+# GUI
 gui:
-  path: 'models/model_20_rl.pt'
+  path: 'models/model_22_rl.pt'
   structure: alphazero_structure
   num_simulations: 1000
   c_puct: 1.5

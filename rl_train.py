@@ -2,7 +2,7 @@ import torch
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from architecture import AlphaZeroGomokuNet, AlphaZeroLoss
-from players import heuristic_player
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils import load_cnn_model
 import shutil
 import glob
@@ -15,6 +15,7 @@ from mcts import MCTS
 import numpy as np
 import time
 from stats_logger import log_iteration_stats
+from players_logic import select_weighted_move
 
 class RLDataset(Dataset):
     def __init__(self, data_path):
@@ -101,77 +102,162 @@ def get_sliding_window_data(window_size=2,target_moves=20000, output_path="Data_
     return output_path, len(all_data), files_used
 
 
-def evaluate_candidate(candidate_path, current_model_path, baseline_model_path='models/model_22_rl.pt',
-                       num_games_old=40, num_games_heur=20, num_games_base=40,
-                       threshold_old=52.0, threshold_base=60.0, threshold_heur=80.0,
-                       num_simulations=100, c_puct=1.5, opening_moves_k=2):
-    print(f"\n--- Evaluating candidate ---")
-    candidate = load_cnn_model(candidate_path, AlphaZeroGomokuNet())
-    current_best = load_cnn_model(current_model_path, AlphaZeroGomokuNet())
+def play_single_eval_game(candidate_model, opponent_model, opponent_type,
+                          candidate_plays_x, num_simulations, c_puct, opening_moves_k):
 
-    baseline_model = load_cnn_model(baseline_model_path, AlphaZeroGomokuNet())
-    mcts_cand = MCTS(candidate, num_simulations=num_simulations, c_puct=c_puct)
-    mcts_best = MCTS(current_best, num_simulations=num_simulations, c_puct=c_puct)
-    mcts_base = MCTS(baseline_model, num_simulations=num_simulations, c_puct=c_puct)
-
-    def cand_move(eng):
-        pi = mcts_cand.get_action_probs(eng, temperature=0.0)
-        action = np.argmax(pi)
-        return action // eng.board_size, action % eng.board_size
-
-    def best_move(eng):
-        pi = mcts_best.get_action_probs(eng, temperature=0.0)
-        action = np.argmax(pi)
-        return action // eng.board_size, action % eng.board_size
-
-    def baseline_move(eng):
-        pi = mcts_base.get_action_probs(eng, temperature=0.0)
-        action = np.argmax(pi)
-        return action // eng.board_size, action % eng.board_size
+    engine = GomokuEngine()
 
     center_coords = [6, 7, 8]
     central_moves = [(r, c) for r in center_coords for c in center_coords]
+    for r, c in random.sample(central_moves, k=opening_moves_k):
+        engine.make_move(r, c)
 
-    def run_duel(p1, p2, games):
-        p1_wins = 0
-        draws = 0
-        match_openings = [random.sample(central_moves, k=opening_moves_k) for _ in range(games)]
+    mcts_candidate = MCTS(candidate_model, num_simulations=num_simulations, c_puct=c_puct)
+    mcts_opponent = None
+    if opponent_type == 'mcts':
+        mcts_opponent = MCTS(opponent_model, num_simulations=num_simulations, c_puct=c_puct)
 
-        for i in range(games // 2):
-            game = GomokuEngine()
-            game.play_game(p1, p2, match_openings[i])
-            if game.winner == 'X':
-                p1_wins += 1
-            elif game.winner == 'Draw':
-                draws += 1
+    candidate_symbol = 'X' if candidate_plays_x else 'O'
 
-        for i in range(games // 2, games):
-            game = GomokuEngine()
-            game.play_game(p2, p1, match_openings[i])
-            if game.winner == 'O':
-                p1_wins += 1
-            elif game.winner == 'Draw':
-                draws += 1
+    while not engine.is_game_over:
+        current_p = engine.current_player
 
-        return ((p1_wins + (draws * 0.5)) / games) * 100.0
+        if current_p == candidate_symbol:
+            pi = mcts_candidate.get_action_probs(engine, temperature=1.0)
+            action = int(np.argmax(pi))
+            row, col = action // engine.board_size, action % engine.board_size
+        else:
+            if opponent_type == 'mcts':
+                pi = mcts_opponent.get_action_probs(engine, temperature=1.0)
+                action = int(np.argmax(pi))
+                row, col = action // engine.board_size, action % engine.board_size
+            elif opponent_type == 'heuristic':
+                row, col = select_weighted_move(engine)
+            elif opponent_type == 'raw_net':
+                device = next(opponent_model.parameters()).device
+                board_np = np.array(engine.board)
+                ch_my = (board_np == current_p).astype(np.float32)
+                ch_opp = (board_np == ('O' if current_p == 'X' else 'X')).astype(np.float32)
+                ch_empty = (board_np == '.').astype(np.float32)
+                state_t = torch.tensor(np.stack([ch_my, ch_opp, ch_empty]), dtype=torch.float32,
+                                       device=device).unsqueeze(0)
 
-    # Candidate vs current master
-    winrate_old = run_duel(cand_move, best_move, num_games_old)
-    print(f"Result [Candidate vs Current Master]: {winrate_old:.1f}% win ratio")
-    # Candidate vs base model
-    winrate_baseline = run_duel(cand_move, baseline_move, num_games_base)
-    print(f"Result [Candidate vs Base CNN model]: {winrate_baseline:.1f}% win ratio")
-    # Candidate vs heuristic
-    winrate_heur = run_duel(cand_move, heuristic_player, num_games_heur)
-    print(f"Result [Candidate vs Heuristic]:   {winrate_heur:.1f}% win ratio")
+                with torch.inference_mode():
+                    logits, _ = opponent_model(state_t)
+                    probs = torch.softmax(logits, dim=1).cpu().numpy().flatten()
 
-    passed = (winrate_old >= threshold_old) and (winrate_baseline >= threshold_base) and (winrate_heur >= threshold_heur)
-    return {
-        "passed": passed,
-        "winrate_master": round(winrate_old, 2),
-        "winrate_base": round(winrate_baseline, 2),
-        "winrate_heur": round(winrate_heur, 2)
-    }
+                legal_mask = (board_np.flatten() == '.')
+                probs[~legal_mask] = -1.0
+                action = int(np.argmax(probs))
+                row, col = action // engine.board_size, action % engine.board_size
+
+        engine.make_move(row, col)
+
+    if engine.winner == 'Draw':
+        return 0.5
+    elif engine.winner == candidate_symbol:
+        return 1.0
+    else:
+        return 0.0
+
+
+def run_parallel_match(candidate_model, opponent_model, opponent_type, num_games,
+                       num_simulations, c_puct, opening_moves_k, max_threads=8):
+
+    if num_games <= 0:
+        return 100.0
+
+    score = 0.0
+    with ThreadPoolExecutor(max_workers=max_threads) as executor:
+        futures = []
+        for i in range(num_games):
+            candidate_plays_x = (i % 2 == 0)
+            futures.append(
+                executor.submit(
+                    play_single_eval_game,
+                    candidate_model, opponent_model, opponent_type,
+                    candidate_plays_x, num_simulations, c_puct, opening_moves_k
+                )
+            )
+
+        for future in as_completed(futures):
+            score += future.result()
+
+    return (score / num_games) * 100.0
+
+
+def evaluate_candidate(candidate_model_path, current_master_model_path, baseline_model_path,
+                       num_games_old=40, num_games_heur=40, num_games_base=20,
+                       threshold_old=52.0, threshold_base=0.0, threshold_heur=0.0,
+                       num_simulations=300, c_puct=1.0, opening_moves_k=2,
+                       max_threads=8):
+    print("\n--- Evaluating candidate (Parallel) ---")
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    candidate_model = AlphaZeroGomokuNet().to(device)
+    candidate_model.load_state_dict(torch.load(candidate_model_path, map_location=device, weights_only=True))
+    candidate_model.eval()
+
+    current_master_model = AlphaZeroGomokuNet().to(device)
+    current_master_model.load_state_dict(torch.load(current_master_model_path, map_location=device, weights_only=True))
+    current_master_model.eval()
+
+    win_ratio_old = run_parallel_match(
+        candidate_model=candidate_model,
+        opponent_model=current_master_model,
+        opponent_type='mcts',
+        num_games=num_games_old,
+        num_simulations=num_simulations,
+        c_puct=c_puct,
+        opening_moves_k=opening_moves_k,
+        max_threads=max_threads
+    )
+    print(f"Result [Candidate vs Current Master]: {win_ratio_old:.1f}% win ratio")
+
+    if win_ratio_old < threshold_old:
+        print(">>> Candidate Failed to pass evaluation (Lost to Master)")
+        return {"passed": False, "winrate_master": win_ratio_old, "winrate_base": 0.0, "winrate_heur": 0.0}
+
+    base_model = AlphaZeroGomokuNet().to(device)
+    base_model.load_state_dict(torch.load(baseline_model_path, map_location=device, weights_only=True))
+    base_model.eval()
+
+    win_ratio_base = run_parallel_match(
+        candidate_model=candidate_model,
+        opponent_model=base_model,
+        opponent_type='mcts',
+        num_games=num_games_base,
+        num_simulations=num_simulations,
+        c_puct=c_puct,
+        opening_moves_k=opening_moves_k,
+        max_threads=max_threads
+    )
+    print(f"Result [Candidate vs Base CNN model]: {win_ratio_base:.1f}% win ratio")
+
+    if win_ratio_base < threshold_base:
+        print(">>> Candidate Failed to pass evaluation (Lost to Base model)")
+        return {"passed": False, "winrate_master": win_ratio_old, "winrate_base": win_ratio_base, "winrate_heur": 0.0}
+
+    win_ratio_heur = run_parallel_match(
+        candidate_model=candidate_model,
+        opponent_model=None,
+        opponent_type='heuristic',
+        num_games=num_games_heur,
+        num_simulations=num_simulations,
+        c_puct=c_puct,
+        opening_moves_k=opening_moves_k,
+        max_threads=max_threads
+    )
+    print(f"Result [Candidate vs Heuristic]:   {win_ratio_heur:.1f}% win ratio")
+
+    passed = (win_ratio_old >= threshold_old and win_ratio_base >= threshold_base and win_ratio_heur >= threshold_heur)
+
+    if passed:
+        print(">>> Candidate PASSED evaluation and becomes the new Master!")
+    else:
+        print(">>> Candidate Failed to pass evaluation")
+
+    return {"passed": passed, "winrate_master": win_ratio_old, "winrate_base": win_ratio_base, "winrate_heur": win_ratio_heur}
 
 
 def main_rl_loop(iterations=5, num_games=3000, window_size=3, target_moves = 100000,only_winners=False,skip_first_gen=False,
