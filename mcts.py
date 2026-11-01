@@ -3,6 +3,7 @@ import numpy as np
 import copy
 from players_logic import get_network_output
 
+
 class Node:
     def __init__(self, parent=None, prior_prob=1.0):
         self.parent = parent
@@ -28,10 +29,13 @@ class Node:
             return 0.0
         return self.value_sum / self.visit_count
 
-    def ucb_score(self, parent_visit_count, c_puct=1.5):
-        q = self.q_value()
-        u = c_puct * self.prior_prob * math.sqrt(parent_visit_count) / (1 + self.visit_count)
+    def ucb_score(self, parent_visit_count, parent_q=0.0, c_puct=1.5, fpu_reduction=0.20):
+        if self.visit_count == 0:
+            q = max(-1.0, -parent_q - fpu_reduction)
+        else:
+            q = self.q_value()
 
+        u = c_puct * self.prior_prob * math.sqrt(max(1, parent_visit_count)) / (1 + self.visit_count)
         return q + u
 
 
@@ -43,8 +47,9 @@ class MCTS:
 
     def get_action_probs(self, engine, temperature=1.0):
         root = Node()
-        policy, _ = self._evaluate(engine)
+        policy, root_value = self._evaluate(engine)
         root.expand(policy)
+        root.update(-float(root_value))
 
         for _ in range(self.num_simulations):
             node = root
@@ -67,14 +72,18 @@ class MCTS:
                 else:
                     value = -1.0
 
-            self._backpropagate(search_path, value)
+            self._backpropagate(search_path, float(value))
 
-        action_probs = np.zeros(engine.board_size * engine.board_size)
+        action_probs = np.zeros(engine.board_size * engine.board_size, dtype=np.float32)
         for action, child in root.children.items():
             action_probs[action] = child.visit_count
 
+        max_visits = np.max(action_probs)
+        if max_visits > 2:
+            action_probs[action_probs <= 1] = 0.0
+
         if temperature == 0:
-            best_action = np.argmax(action_probs)
+            best_action = int(np.argmax(action_probs))
             action_probs = np.zeros_like(action_probs)
             action_probs[best_action] = 1.0
         else:
@@ -87,8 +96,10 @@ class MCTS:
         best_score = -float('inf')
         best_action = -1
         best_child = None
+        parent_q = node.q_value()
+
         for action, child in node.children.items():
-            score = child.ucb_score(node.visit_count, self.c_puct)
+            score = child.ucb_score(node.visit_count, parent_q=parent_q, c_puct=self.c_puct)
             if score > best_score:
                 best_score = score
                 best_action = action
@@ -99,7 +110,6 @@ class MCTS:
         for node in reversed(search_path):
             value = -value
             node.update(value)
-
 
     def _evaluate(self, engine):
         device = next(self.model.parameters()).device

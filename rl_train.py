@@ -109,7 +109,7 @@ def play_single_eval_game(candidate_model, opponent_model, opponent_type,
 
     center_coords = [6, 7, 8]
     central_moves = [(r, c) for r in center_coords for c in center_coords]
-    for r, c in random.sample(central_moves, k=opening_moves_k):
+    for r, c in random.sample(central_moves, k=int(opening_moves_k)):
         engine.make_move(r, c)
 
     mcts_candidate = MCTS(candidate_model, num_simulations=num_simulations, c_puct=c_puct)
@@ -193,62 +193,62 @@ def evaluate_candidate(candidate_model_path, current_master_model_path, baseline
                        max_threads=8):
     print("\n--- Evaluating candidate (Parallel) ---")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    with torch.inference_mode():
+        candidate_model = AlphaZeroGomokuNet().to(device)
+        candidate_model.load_state_dict(torch.load(candidate_model_path, map_location=device, weights_only=True))
+        candidate_model.eval()
 
-    candidate_model = AlphaZeroGomokuNet().to(device)
-    candidate_model.load_state_dict(torch.load(candidate_model_path, map_location=device, weights_only=True))
-    candidate_model.eval()
+        current_master_model = AlphaZeroGomokuNet().to(device)
+        current_master_model.load_state_dict(torch.load(current_master_model_path, map_location=device, weights_only=True))
+        current_master_model.eval()
 
-    current_master_model = AlphaZeroGomokuNet().to(device)
-    current_master_model.load_state_dict(torch.load(current_master_model_path, map_location=device, weights_only=True))
-    current_master_model.eval()
+        win_ratio_old = run_parallel_match(
+            candidate_model=candidate_model,
+            opponent_model=current_master_model,
+            opponent_type='mcts',
+            num_games=num_games_old,
+            num_simulations=num_simulations,
+            c_puct=c_puct,
+            opening_moves_k=opening_moves_k,
+            max_threads=max_threads
+        )
+        print(f"Result [Candidate vs Current Master]: {win_ratio_old:.1f}% win ratio")
 
-    win_ratio_old = run_parallel_match(
-        candidate_model=candidate_model,
-        opponent_model=current_master_model,
-        opponent_type='mcts',
-        num_games=num_games_old,
-        num_simulations=num_simulations,
-        c_puct=c_puct,
-        opening_moves_k=opening_moves_k,
-        max_threads=max_threads
-    )
-    print(f"Result [Candidate vs Current Master]: {win_ratio_old:.1f}% win ratio")
+        if win_ratio_old < threshold_old:
+            print(">>> Candidate Failed to pass evaluation (Lost to Master)")
+            return {"passed": False, "winrate_master": win_ratio_old, "winrate_base": 0.0, "winrate_heur": 0.0}
 
-    if win_ratio_old < threshold_old:
-        print(">>> Candidate Failed to pass evaluation (Lost to Master)")
-        return {"passed": False, "winrate_master": win_ratio_old, "winrate_base": 0.0, "winrate_heur": 0.0}
+        base_model = AlphaZeroGomokuNet().to(device)
+        base_model.load_state_dict(torch.load(baseline_model_path, map_location=device, weights_only=True))
+        base_model.eval()
 
-    base_model = AlphaZeroGomokuNet().to(device)
-    base_model.load_state_dict(torch.load(baseline_model_path, map_location=device, weights_only=True))
-    base_model.eval()
+        win_ratio_base = run_parallel_match(
+            candidate_model=candidate_model,
+            opponent_model=base_model,
+            opponent_type='mcts',
+            num_games=num_games_base,
+            num_simulations=num_simulations,
+            c_puct=c_puct,
+            opening_moves_k=opening_moves_k,
+            max_threads=max_threads
+        )
+        print(f"Result [Candidate vs Base CNN model]: {win_ratio_base:.1f}% win ratio")
 
-    win_ratio_base = run_parallel_match(
-        candidate_model=candidate_model,
-        opponent_model=base_model,
-        opponent_type='mcts',
-        num_games=num_games_base,
-        num_simulations=num_simulations,
-        c_puct=c_puct,
-        opening_moves_k=opening_moves_k,
-        max_threads=max_threads
-    )
-    print(f"Result [Candidate vs Base CNN model]: {win_ratio_base:.1f}% win ratio")
+        if win_ratio_base < threshold_base:
+            print(">>> Candidate Failed to pass evaluation (Lost to Base model)")
+            return {"passed": False, "winrate_master": win_ratio_old, "winrate_base": win_ratio_base, "winrate_heur": 0.0}
 
-    if win_ratio_base < threshold_base:
-        print(">>> Candidate Failed to pass evaluation (Lost to Base model)")
-        return {"passed": False, "winrate_master": win_ratio_old, "winrate_base": win_ratio_base, "winrate_heur": 0.0}
-
-    win_ratio_heur = run_parallel_match(
-        candidate_model=candidate_model,
-        opponent_model=None,
-        opponent_type='heuristic',
-        num_games=num_games_heur,
-        num_simulations=num_simulations,
-        c_puct=c_puct,
-        opening_moves_k=opening_moves_k,
-        max_threads=max_threads
-    )
-    print(f"Result [Candidate vs Heuristic]:   {win_ratio_heur:.1f}% win ratio")
+        win_ratio_heur = run_parallel_match(
+            candidate_model=candidate_model,
+            opponent_model=None,
+            opponent_type='heuristic',
+            num_games=num_games_heur,
+            num_simulations=num_simulations,
+            c_puct=c_puct,
+            opening_moves_k=opening_moves_k,
+            max_threads=max_threads
+        )
+        print(f"Result [Candidate vs Heuristic]:   {win_ratio_heur:.1f}% win ratio")
 
     passed = (win_ratio_old >= threshold_old and win_ratio_base >= threshold_base and win_ratio_heur >= threshold_heur)
 

@@ -9,16 +9,13 @@ from mcts import MCTS
 from players_logic import select_weighted_move
 
 
-def play_single_game(model, num_simulations, c_puct, temp_moves, temp, opening_moves_k, player_x_type, player_o_type):
-    """
-    Funkcja rozgrywająca jedną, niezależną grę. Działa bezpiecznie w swoim własnym wątku.
-    """
+def play_single_game(model, num_simulations, c_puct, temp_moves, temp, opening_moves_k, gamma, player_x_type, player_o_type):
     engine = GomokuEngine()
     mcts = MCTS(model, num_simulations=num_simulations, c_puct=c_puct)
 
     center_coords = [6, 7, 8]
     central_moves = [(r, c) for r in center_coords for c in center_coords]
-    opening_moves = random.sample(central_moves, k=opening_moves_k)
+    opening_moves = random.sample(central_moves, k=int(opening_moves_k))
 
     for r, c in opening_moves:
         engine.make_move(r, c)
@@ -42,30 +39,39 @@ def play_single_game(model, num_simulations, c_puct, temp_moves, temp, opening_m
                 action = np.random.choice(len(pi), p=scaled_pi)
 
             row, col = action // engine.board_size, action % engine.board_size
+
+            board_np = np.array(engine.board)
+            channel_my = (board_np == current_p).astype(np.float32)
+            channel_opp = (board_np == ('O' if current_p == 'X' else 'X')).astype(np.float32)
+            channel_empty = (board_np == '.').astype(np.float32)
+            state_3c = np.stack([channel_my, channel_opp, channel_empty], axis=0)
+
+            game_history.append({
+                'player': current_p,
+                'state': state_3c,
+                'pi': pi,
+                'move_no': moves_played
+            })
         else:
             row, col = select_weighted_move(engine)
-            pi = np.zeros(engine.board_size * engine.board_size, dtype=np.float32)
-            pi[row * engine.board_size + col] = 1.0
 
-        board_np = np.array(engine.board)
-        channel_my = (board_np == current_p).astype(np.float32)
-        channel_opp = (board_np == ('O' if current_p == 'X' else 'X')).astype(np.float32)
-        channel_empty = (board_np == '.').astype(np.float32)
-        state_3c = np.stack([channel_my, channel_opp, channel_empty], axis=0)
-
-        game_history.append({'player': current_p, 'state': state_3c, 'pi': pi})
         engine.make_move(row, col)
 
     winner = engine.winner
+    total_moves = engine.move_number
+    gamma = gamma
     game_data = []
 
     for step in game_history:
         if winner == 'Draw':
-            reward = 0.0
+            base_reward = 0.0
         elif step['player'] == winner:
-            reward = 1.0
+            base_reward = 1.0
         else:
-            reward = -1.0
+            base_reward = -1.0
+
+        steps_from_end = max(0, (total_moves - 1) - step['move_no'])
+        reward = float(base_reward * (gamma ** steps_from_end))
 
         state = step['state']
         pi_2d = step['pi'].reshape(engine.board_size, engine.board_size)
@@ -84,7 +90,7 @@ def play_single_game(model, num_simulations, c_puct, temp_moves, temp, opening_m
 
 def generate_bootstrapping_data(model, num_games=10, num_simulations=25, c_puct=1.5,
                                 temp_moves=12, temp=0.5, opening_moves_k=2,
-                                heuristic_ratio=0.2, max_threads=10):
+                                heuristic_ratio=0.2, max_threads=10, gamma=0.97):
     print(f"Starting to generate {num_games} games in parallel (Threads: {max_threads})...")
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     os.makedirs('Data_rfl', exist_ok=True)
@@ -107,7 +113,7 @@ def generate_bootstrapping_data(model, num_games=10, num_simulations=25, c_puct=
         for px, po in matchups:
             future = executor.submit(
                 play_single_game,
-                model, num_simulations, c_puct, temp_moves, temp, opening_moves_k, px, po
+                model, num_simulations, c_puct, temp_moves, temp, opening_moves_k, gamma, px, po
             )
             future_to_matchup[future] = (px, po)
 
