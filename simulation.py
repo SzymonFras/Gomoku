@@ -28,7 +28,7 @@ def play_single_game(model, num_simulations, c_puct, temp_moves, temp, opening_m
         current_type = player_x_type if current_p == 'X' else player_o_type
 
         if current_type == 'M':
-            pi = mcts.get_action_probs(engine, temperature=1.0)
+            pi = mcts.get_action_probs(engine, temperature=1.0, add_noise=True)
             current_temp = temp if moves_played < temp_moves else 0.0
 
             if current_temp == 0.0:
