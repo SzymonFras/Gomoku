@@ -12,13 +12,13 @@ from players_logic import select_weighted_move
 def play_single_game(model, num_simulations, c_puct, temp_moves, temp, opening_moves_k, gamma, player_x_type, player_o_type):
     engine = GomokuEngine()
     mcts = MCTS(model, num_simulations=num_simulations, c_puct=c_puct)
+    if opening_moves_k>0:
+        center_coords = [6, 7, 8]
+        central_moves = [(r, c) for r in center_coords for c in center_coords]
+        opening_moves = random.sample(central_moves, k=int(opening_moves_k))
 
-    center_coords = [6, 7, 8]
-    central_moves = [(r, c) for r in center_coords for c in center_coords]
-    opening_moves = random.sample(central_moves, k=int(opening_moves_k))
-
-    for r, c in opening_moves:
-        engine.make_move(r, c)
+        for r, c in opening_moves:
+            engine.make_move(r, c)
 
     game_history = []
 

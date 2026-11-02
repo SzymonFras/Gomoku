@@ -11,7 +11,6 @@ class Node:
         self.visit_count = 0
         self.value_sum = 0.0
         self.prior_prob = prior_prob
-        self.status = 0
 
     def is_expanded(self):
         return len(self.children) > 0
@@ -26,25 +25,12 @@ class Node:
         self.value_sum += value
 
     def q_value(self):
-        if self.status == 1:
-            return 1.0
-        if self.status == -1:
-            return -1.0
         if self.visit_count == 0:
             return 0.0
         return self.value_sum / self.visit_count
 
-    def ucb_score(self, parent_visit_count, parent_q=0.0, c_puct=1.5, fpu_reduction=0.20):
-        if self.status == 1:
-            return 1e6
-        if self.status == -1:
-            return -1e6
-
-        if self.visit_count == 0:
-            q = max(-1.0, -parent_q - fpu_reduction)
-        else:
-            q = self.q_value()
-
+    def ucb_score(self, parent_visit_count, c_puct=1.5):
+        q = self.q_value()
         u = c_puct * self.prior_prob * math.sqrt(max(1, parent_visit_count)) / (1 + self.visit_count)
         return q + u
 
@@ -57,7 +43,7 @@ class MCTS:
 
     def get_action_probs(self, engine, temperature=1.0, add_noise=False, dirichlet_alpha=0.25, noise_eps=0.25):
         root = Node()
-        policy, root_value = self._evaluate(engine)
+        policy, _ = self._evaluate(engine)
 
         if add_noise and len(policy) > 1:
             actions = list(policy.keys())
@@ -67,14 +53,8 @@ class MCTS:
             policy = {a: float(p) for a, p in zip(actions, noisy_probs)}
 
         root.expand(policy)
-        root.update(-float(root_value))
 
         for _ in range(self.num_simulations):
-            if any(c.status == 1 for c in root.children.values()):
-                break
-            if root.children and all(c.status == -1 for c in root.children.values()):
-                break
-
             node = root
             sim_engine = copy.deepcopy(engine)
             search_path = [node]
@@ -86,7 +66,6 @@ class MCTS:
                 search_path.append(node)
 
             value = 0.0
-            is_terminal_win = False
             if not sim_engine.is_game_over:
                 policy, value = self._evaluate(sim_engine)
                 node.expand(policy)
@@ -95,28 +74,12 @@ class MCTS:
                     value = 0.0
                 else:
                     value = -1.0
-                    is_terminal_win = True
 
-            self._backpropagate(search_path, float(value), is_terminal_win)
+            self._backpropagate(search_path, float(value))
 
         action_probs = np.zeros(engine.board_size * engine.board_size, dtype=np.float32)
-
-        winning_actions = [a for a, child in root.children.items() if child.status == 1]
-        if winning_actions:
-            action_probs[winning_actions[0]] = 1.0
-            return action_probs
-
         for action, child in root.children.items():
-            if child.status != -1:
-                action_probs[action] = child.visit_count
-
-        if np.sum(action_probs) == 0:
-            for action, child in root.children.items():
-                action_probs[action] = max(1, child.visit_count)
-
-        max_visits = np.max(action_probs)
-        if max_visits > 2:
-            action_probs[action_probs <= 1] = 0.0
+            action_probs[action] = child.visit_count
 
         if temperature == 0:
             best_action = int(np.argmax(action_probs))
@@ -129,47 +92,29 @@ class MCTS:
         return action_probs
 
     def _select_child(self, node):
-        for action, child in node.children.items():
-            if child.status == 1:
-                return action, child
-
         best_score = -float('inf')
         best_action = -1
         best_child = None
-        parent_q = node.q_value()
-
-        non_losing = [c for c in node.children.values() if c.status != -1]
-        ignore_losing = len(non_losing) > 0
 
         for action, child in node.children.items():
-            if ignore_losing and child.status == -1:
-                continue
-            score = child.ucb_score(node.visit_count, parent_q=parent_q, c_puct=self.c_puct)
+            score = child.ucb_score(node.visit_count, c_puct=self.c_puct)
             if score > best_score:
                 best_score = score
                 best_action = action
                 best_child = child
         return best_action, best_child
 
-    def _backpropagate(self, search_path, value, is_terminal_win=False):
-        if is_terminal_win:
-            search_path[-1].status = 1
-
+    def _backpropagate(self, search_path, value):
         for node in reversed(search_path):
             value = -value
             node.update(value)
-            if node.children and node.status == 0:
-                if any(c.status == 1 for c in node.children.values()):
-                    node.status = -1
-                elif all(c.status == -1 for c in node.children.values()):
-                    node.status = 1
 
     def _get_active_legal_moves(self, engine, radius=2):
         board_np = np.array(engine.board)
         occupied = np.argwhere(board_np != '.')
         if len(occupied) == 0:
             center = engine.board_size // 2
-            return [(center, center)]
+            return [(r, c) for r in range(center - 1, center + 2) for c in range(center - 1, center + 2)]
 
         mask = np.zeros((engine.board_size, engine.board_size), dtype=bool)
         for r, c in occupied:
