@@ -36,26 +36,45 @@ class Node:
 
 
 class MCTS:
-    def __init__(self, model, num_simulations=25, c_puct=1.5):
+    def __init__(self, model, num_simulations=25, c_puct=1.5, max_cache_size=50000):
         self.model = model
         self.num_simulations = num_simulations
         self.c_puct = c_puct
+        self.root = Node()
+        self.nn_cache = {}
+        self.max_cache_size = max_cache_size
+
+    def update_with_move(self, last_action):
+        if last_action in self.root.children:
+            self.root = self.root.children[last_action]
+            self.root.parent = None
+        else:
+            self.root = Node()
 
     def get_action_probs(self, engine, temperature=1.0, add_noise=False, dirichlet_alpha=0.25, noise_eps=0.25):
-        root = Node()
-        policy, _ = self._evaluate(engine)
-
-        if add_noise and len(policy) > 1:
-            actions = list(policy.keys())
-            probs = np.array([policy[a] for a in actions], dtype=np.float32)
+        if not self.root.is_expanded():
+            policy, _ = self._evaluate(engine)
+            if add_noise and len(policy) > 1:
+                actions = list(policy.keys())
+                probs = np.array([policy[a] for a in actions], dtype=np.float32)
+                noise = np.random.dirichlet([dirichlet_alpha] * len(actions))
+                noisy_probs = (1.0 - noise_eps) * probs + noise_eps * noise
+                policy = {a: float(p) for a, p in zip(actions, noisy_probs)}
+            self.root.expand(policy)
+        elif add_noise and len(self.root.children) > 1:
+            actions = list(self.root.children.keys())
             noise = np.random.dirichlet([dirichlet_alpha] * len(actions))
-            noisy_probs = (1.0 - noise_eps) * probs + noise_eps * noise
-            policy = {a: float(p) for a, p in zip(actions, noisy_probs)}
+            for a, n in zip(actions, noise):
+                self.root.children[a].prior_prob = (1.0 - noise_eps) * self.root.children[a].prior_prob + noise_eps * n
 
-        root.expand(policy)
+        if temperature == 0 and len(self.root.children) == 1:
+            only_action = next(iter(self.root.children.keys()))
+            action_probs = np.zeros(engine.board_size * engine.board_size, dtype=np.float32)
+            action_probs[only_action] = 1.0
+            return action_probs
 
-        for _ in range(self.num_simulations):
-            node = root
+        for sim_idx in range(self.num_simulations):
+            node = self.root
             sim_engine = copy.deepcopy(engine)
             search_path = [node]
 
@@ -76,9 +95,14 @@ class MCTS:
                     value = -1.0
 
             self._backpropagate(search_path, float(value))
+            if temperature == 0 and (sim_idx % 10 == 0) and len(self.root.children) >= 2:
+                remaining_sims = self.num_simulations - 1 - sim_idx
+                visits = sorted((child.visit_count for child in self.root.children.values()), reverse=True)
+                if visits[0] - visits[1] > remaining_sims:
+                    break
 
         action_probs = np.zeros(engine.board_size * engine.board_size, dtype=np.float32)
-        for action, child in root.children.items():
+        for action, child in self.root.children.items():
             action_probs[action] = child.visit_count
 
         if temperature == 0:
@@ -127,6 +151,9 @@ class MCTS:
         return active_moves if active_moves else engine.get_legal_moves()
 
     def _evaluate(self, engine):
+        board_key = (engine.current_player, tuple(map(tuple, engine.board)))
+        if board_key in self.nn_cache:
+            return self.nn_cache[board_key]
         device = next(self.model.parameters()).device
         logits, value, _ = get_network_output(self.model, engine.board, engine.current_player, device)
         logits_np = logits.cpu().numpy()
@@ -141,5 +168,10 @@ class MCTS:
 
             for action_idx, prob in zip(legal_indices, probs):
                 policy[action_idx] = prob
+
+        value_float = float(value)
+        if len(self.nn_cache) >= self.max_cache_size:
+            self.nn_cache.clear()
+        self.nn_cache[board_key] = (policy, value_float)
 
         return policy, value

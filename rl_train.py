@@ -121,18 +121,20 @@ def play_single_eval_game(candidate_model, opponent_model, opponent_type,
 
     while not engine.is_game_over:
         current_p = engine.current_player
+        action = None
 
         if current_p == candidate_symbol:
-            pi = mcts_candidate.get_action_probs(engine, temperature=1.0)
+            pi = mcts_candidate.get_action_probs(engine, temperature=0.0)
             action = int(np.argmax(pi))
             row, col = action // engine.board_size, action % engine.board_size
         else:
             if opponent_type == 'mcts':
-                pi = mcts_opponent.get_action_probs(engine, temperature=1.0)
+                pi = mcts_opponent.get_action_probs(engine, temperature=0.0)
                 action = int(np.argmax(pi))
                 row, col = action // engine.board_size, action % engine.board_size
             elif opponent_type == 'heuristic':
                 row, col = select_weighted_move(engine)
+                action = row * engine.board_size + col
             elif opponent_type == 'raw_net':
                 device = next(opponent_model.parameters()).device
                 board_np = np.array(engine.board)
@@ -152,7 +154,9 @@ def play_single_eval_game(candidate_model, opponent_model, opponent_type,
                 row, col = action // engine.board_size, action % engine.board_size
 
         engine.make_move(row, col)
-
+        mcts_candidate.update_with_move(action)
+        if opponent_type == 'mcts':
+            mcts_opponent.update_with_move(action)
     if engine.winner == 'Draw':
         return 0.5
     elif engine.winner == candidate_symbol:
@@ -261,7 +265,7 @@ def evaluate_candidate(candidate_model_path, current_master_model_path, baseline
 
 
 def main_rl_loop(iterations=5, num_games=3000, window_size=3, target_moves = 100000,only_winners=False,skip_first_gen=False,
-                 warmup_data_path="Data_rfl/warmup_buffer.pt", warmup_ratios=None):
+                 warmup_data_path="Data_rfl/warmup_buffer.pt", warmup_ratios=None, consecutive_failures=0):
     current_version, current_master = get_latest_master()
     candidate_model = 'models/model_candidate.pt'
     if warmup_ratios is None:
@@ -274,7 +278,10 @@ def main_rl_loop(iterations=5, num_games=3000, window_size=3, target_moves = 100
         print(f"\n=============================================")
         print(f"           Iteration of RL {i + 1}/{iterations}            ")
         print(f"=============================================")
+        dynamic_window = window_size + consecutive_failures
 
+        if consecutive_failures > 0:
+            print(f">>> [!] Consecutive failures: {consecutive_failures}. Expanding buffer!")
         model_to_play = load_cnn_model(current_master, AlphaZeroGomokuNet())
         ratio = warmup_ratios[i] if i < len(warmup_ratios) else 0.0
         if i == 0 and skip_first_gen:
@@ -289,13 +296,13 @@ def main_rl_loop(iterations=5, num_games=3000, window_size=3, target_moves = 100
             current_lr = run_rl_training_params().get('lr', 0.00002)
             generate_bootstrapping_data(model_to_play,  **(generate_bootstrapping_data_params()| {'num_games': num_games}))
             while True:
-                training_data_path, num_winning_moves, files_used = get_sliding_window_data(window_size=window_size,
+                training_data_path, num_winning_moves, files_used = get_sliding_window_data(window_size=dynamic_window,
                                                                                             only_winners=only_winners,
                                                                                             warmup_ratio=ratio,
                                                                                             target_moves=target_moves,
                                                                                             warmup_path=warmup_data_path)
-                if num_winning_moves >= target_moves and files_used >= window_size:
-                    print(f">>> {num_winning_moves} moves found in {window_size} files. Starting the training")
+                if num_winning_moves >= target_moves and files_used >= dynamic_window:
+                    print(f">>> {num_winning_moves} moves found in {dynamic_window} files. Starting the training")
                     break
                 else:
                     print(f">>> Not enough moves in the window {num_winning_moves}/{target_moves}")
@@ -311,6 +318,7 @@ def main_rl_loop(iterations=5, num_games=3000, window_size=3, target_moves = 100
 
         if eval_results["passed"]:
             current_version += 1
+            consecutive_failures = 0
             new_master_path = f'models/model_{current_version}_rl.pt'
 
             print(f">>> Succes! Candidate passed evaluation")
@@ -318,6 +326,7 @@ def main_rl_loop(iterations=5, num_games=3000, window_size=3, target_moves = 100
             shutil.copy(candidate_model, new_master_path)
             current_master = new_master_path
         else:
+            consecutive_failures += 1
             print(">>> Candidate Failed to pass evaluation")
         log_iteration_stats(
             iteration=i + 1,

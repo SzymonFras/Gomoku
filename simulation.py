@@ -54,8 +54,9 @@ def play_single_game(model, num_simulations, c_puct, temp_moves, temp, opening_m
             })
         else:
             row, col = select_weighted_move(engine)
-
+            action = row * engine.board_size + col
         engine.make_move(row, col)
+        mcts.update_with_move(action)
 
     winner = engine.winner
     total_moves = engine.move_number
