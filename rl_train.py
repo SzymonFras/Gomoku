@@ -37,7 +37,7 @@ def train_rl_epoch(model, loader, optimizer, criterion, device, scaler):
     for batch_X, batch_y, batch_w in loader:
         batch_X, batch_y, batch_w = batch_X.to(device), batch_y.to(device), batch_w.to(device)
         optimizer.zero_grad()
-        with torch.amp.autocast('cuda'):
+        with torch.amp.autocast('cuda', dtype=torch.float16):
             policy_logits, value_preds = model(batch_X)
             loss = criterion(policy_logits, value_preds, batch_y, batch_w)
         scaler.scale(loss).backward()
